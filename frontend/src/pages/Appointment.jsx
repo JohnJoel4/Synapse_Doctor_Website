@@ -1,5 +1,6 @@
-import React, { useContext, useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+
+import { useContext, useEffect, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { AppContext } from '../context/AppContext';
 import { assets } from '../assets/assets';
 import axios from 'axios'; // Import axios
@@ -15,14 +16,82 @@ const Appointment = () => {
     const [cartItems, setCartItems] = useState([]);
     const [notification, setNotification] = useState(null);
     const [paymentLoading, setPaymentLoading] = useState(false); // Add loading state
+    const [location, setLocation] = useState('default'); // Add location state
+    const navigate = useNavigate()
+
+    const getUserLocation = async () => {
+        try {
+            // Using a free IP geolocation API
+            const response = await fetch('https://ipapi.co/json/');
+            const data = await response.json();
+            if (data.country_code === 'US') {
+                return 'US';
+            } else if (data.country_code === 'IN') {
+                return 'INDIA';
+            } else {
+                return 'default';
+            }
+        } catch (error) {
+            console.error('Error detecting location:', error);
+            return 'default'; // Fallback
+        }
+    };
+
+    // Price configuration based on location
+    const priceConfig = {
+        US: {
+            basic: 100,
+            standard: 150,
+            premium: 200,
+            Extra: 10,
+            Extended: 25,
+            Urgent: 30
+        },
+        INDIA: {
+            basic: 3000,
+            standard: 5000,
+            premium: 7500,
+            Extra: 500,
+            Extended: 1500,
+            Urgent: 2000
+        },
+        default: {
+            basic: 100,
+            standard: 150,
+            premium: 200,
+            Extra: 10,
+            Extended: 25,
+            Urgent: 30
+        }
+    };
+
+    // Add effect to detect location
+    useEffect(() => {
+        const detectLocation = async () => {
+            try {
+                const userLocation = await getUserLocation();
+                setLocation(userLocation);
+            } catch (error) {
+                console.error("Failed to get location:", error);
+                setLocation('default');
+            }
+        };
+
+        detectLocation();
+    }, []);
+
+    // Get location-specific prices
+    const getLocationPrice = (basePriceKey) => {
+        return priceConfig[location]?.[basePriceKey] || priceConfig.default[basePriceKey];
+    };
 
     const plans = [
         {
             name: 'Basic',
             title: 'Basic Review (Asynchronous)',
             subtitle: 'No Live Consultation',
-            emoji: '📋', // Report emoji
-            priceUSD: 100,
+            emoji: '📋',
+            priceUSD: getLocationPrice('basic'), // Use location-based price
             features: [
                 { text: 'Review up to 5 pages of reports', included: true },
                 { text: 'Written summary with key insights', included: true },
@@ -35,8 +104,8 @@ const Appointment = () => {
             name: 'Standard',
             title: 'Standard Review',
             subtitle: 'With WhatsApp Voice Note',
-            emoji: '🎙️', // Voice Record emoji - updated as recommended
-            priceUSD: 150,
+            emoji: '🎙',
+            priceUSD: getLocationPrice('standard'), // Use location-based price
             features: [
                 { text: 'Review up to 10 pages of reports', included: true },
                 { text: 'Summary + WhatsApp voice note explanation', included: true },
@@ -50,9 +119,9 @@ const Appointment = () => {
             name: 'Comprehensive',
             title: 'Comprehensive Review',
             subtitle: 'With Live Video Call',
-            emoji: '📹', // Video Call emoji - updated as recommended
+            emoji: '📹',
             tag: 'POPULAR',
-            priceUSD: 200,
+            priceUSD: getLocationPrice('premium'), // Use location-based price
             features: [
                 { text: 'Review up to 15 pages of reports', included: true },
                 { text: 'Up to 3 follow-up text queries (within 48 hours)', included: true },
@@ -65,10 +134,11 @@ const Appointment = () => {
         },
     ];
 
+
     const addons = [
-        { name: 'extra-pages', label: 'Additional Pages Review', description: 'Add up to 5 extra pages', priceUSD: 10, iconClass: 'fas fa-file-medical' },
-        { name: 'extended-call', label: 'Extended Consultation', description: 'Add 15 minutes to your call', priceUSD: 25, iconClass: 'fas fa-clock' },
-        { name: 'urgent-review', label: 'Urgent Review', description: 'Get your results within 24 hours', priceUSD: 30, iconClass: 'fas fa-bolt' },
+        { name: 'extra-pages', label: 'Additional Pages Review', description: 'Add up to 5 extra pages', priceUSD: getLocationPrice('Extra'), iconClass: 'fas fa-file-medical' },
+        { name: 'extended-call', label: 'Extended Consultation', description: 'Add 15 minutes to your call', priceUSD: getLocationPrice('Extended'), iconClass: 'fas fa-clock' },
+        { name: 'urgent-review', label: 'Urgent Review', description: 'Get your results within 24 hours', priceUSD: getLocationPrice('Urgent'), iconClass: 'fas fa-bolt' },
     ];
 
     const fetchDocInfo = async () => {
@@ -169,7 +239,7 @@ const Appointment = () => {
 
     // Format price with currency symbol
     const formatPrice = (price) => {
-        return `${currencySymbol}${price}`;
+        return `${currencySymbol(location)}${price}`;
     };
 
     // Check if addon is selected
@@ -177,6 +247,11 @@ const Appointment = () => {
 
     // Razorpay Payment
     const handleRazorpayPayment = async () => {
+        if (!token) {
+            toast.warning('Login to book appointment')
+            return navigate('/login')
+        }
+
         setPaymentLoading(true);
         try {
             const totalPrice = calculateTotal();  // Get the total price
@@ -184,10 +259,7 @@ const Appointment = () => {
                 amount: totalPrice
             };
 
-            const { data } = await axios.post(backendUrl + '/api/user/payment-razorpay', appointmentData, {  // Call your backend API
-                headers: { token },
-            });
-
+            const { data } = await axios.post(backendUrl + '/api/user/payment-razorpay', appointmentData, { headers: { token } });
             if (data.success) {
                 const options = {
                     key: import.meta.env.VITE_RAZORPAY_KEY_ID,
@@ -242,6 +314,10 @@ const Appointment = () => {
 
     // Stripe Payment
     const handleStripePayment = async () => {
+        if (!token) {
+            toast.warning('Login to book appointment')
+            return navigate('/login')
+        }
         setPaymentLoading(true);
         try {
             const totalPrice = calculateTotal(); // Get the total price
@@ -264,6 +340,9 @@ const Appointment = () => {
             setPaymentLoading(false);
         }
     };
+
+
+
 
     // Render feature list items
     const renderFeature = (feature) => {
@@ -291,10 +370,9 @@ const Appointment = () => {
         <div className="container mx-auto px-4 pb-16 max-w-6xl">
             {/* Notification */}
             {notification && (
-                <div className={`fixed top-4 left-1/2 transform -translate-x-1/2 p-4 rounded-md shadow-lg z-50 flex items-center max-w-md w-full ${
-                    notification.type === 'success' ? 'bg-green-100 border-l-4 border-green-600 text-green-800' :
-                        'bg-blue-100 border-l-4 border-blue-600 text-blue-800'
-                }`} role="alert">
+                <div className={`fixed top-4 left-1/2 transform -translate-x-1/2 p-4 rounded-md shadow-lg z-50 flex items-center max-w-md w-full ${notification.type === 'success' ? 'bg-green-100 border-l-4 border-green-600 text-green-800' :
+                    'bg-blue-100 border-l-4 border-blue-600 text-blue-800'
+                    }`} role="alert">
                     <div className="flex-shrink-0 mr-3">
                         {notification.type === 'success' ? (
                             <svg className="h-5 w-5 text-green-600" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
@@ -361,11 +439,10 @@ const Appointment = () => {
                             {plans.map((plan) => (
                                 <div
                                     key={plan.name}
-                                    className={`relative overflow-hidden rounded-lg shadow-md transition-all duration-300 hover:shadow-lg ${
-                                        selectedPlan === plan
-                                            ? 'border-2 border-blue-500 ring-4 ring-blue-100'
-                                            : 'border border-gray-200'
-                                    }`}
+                                    className={`relative overflow-hidden rounded-lg shadow-md transition-all duration-300 hover:shadow-lg ${selectedPlan === plan
+                                        ? 'border-2 border-blue-500 ring-4 ring-blue-100'
+                                        : 'border border-gray-200'
+                                        }`}
                                     style={{
                                         borderColor: selectedPlan === plan ? '#3498db' : '',
                                         boxShadow: selectedPlan === plan ? '0 0 0 4px rgba(52, 152, 219, 0.2)' : ''
@@ -422,13 +499,12 @@ const Appointment = () => {
                             {addons.map((addon) => (
                                 <div
                                     key={addon.name}
-                                    className={`relative rounded-lg border transition-all duration-200 cursor-pointer ${
-                                        !selectedPlan
-                                            ? 'opacity-50 border-gray-200 bg-gray-50'
-                                            : isAddonSelected(addon)
-                                                ? 'border-red-500 bg-red-50'
-                                                : 'border-gray-200 hover:border-red-300 hover:bg-red-50'
-                                    }`}
+                                    className={`relative rounded-lg border transition-all duration-200 cursor-pointer ${!selectedPlan
+                                        ? 'opacity-50 border-gray-200 bg-gray-50'
+                                        : isAddonSelected(addon)
+                                            ? 'border-red-500 bg-red-50'
+                                            : 'border-gray-200 hover:border-red-300 hover:bg-red-50'
+                                        }`}
                                     style={{
                                         borderColor: isAddonSelected(addon) ? '#e74c3c' : '',
                                         backgroundColor: isAddonSelected(addon) ? 'rgba(231, 76, 60, 0.05)' : ''
@@ -437,12 +513,11 @@ const Appointment = () => {
                                 >
                                     <div className="p-4 flex items-center justify-between">
                                         <div className="flex items-center">
-                                            <div className={`flex-shrink-0 h-10 w-10 rounded-full flex items-center justify-center ${
-                                                isAddonSelected(addon) ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-500'
-                                            }`} style={{
-                                                backgroundColor: isAddonSelected(addon) ? 'rgba(231, 76, 60, 0.2)' : '',
-                                                color: isAddonSelected(addon) ? '#e74c3c' : ''
-                                            }}>
+                                            <div className={`flex-shrink-0 h-10 w-10 rounded-full flex items-center justify-center ${isAddonSelected(addon) ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-500'
+                                                }`} style={{
+                                                    backgroundColor: isAddonSelected(addon) ? 'rgba(231, 76, 60, 0.2)' : '',
+                                                    color: isAddonSelected(addon) ? '#e74c3c' : ''
+                                                }}>
                                                 <i className={`${addon.iconClass} text-lg`}></i>
                                             </div>
                                             <div className="ml-4">

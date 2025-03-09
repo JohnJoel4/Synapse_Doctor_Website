@@ -20,9 +20,9 @@ try {
     const response = await razorpayInstance.orders.all();
     console.log("Razorpay connection successful!");
     console.log("API response:", response);
-  } catch (error) {
+} catch (error) {
     console.error("Razorpay connection failed:", error.message);
-  }
+}
 
 // API to register user
 const registerUser = async (req, res) => {
@@ -248,19 +248,19 @@ const listAppointment = async (req, res) => {
 const paymentRazorpay = async (req, res) => {
     try {
 
-        const { appointmentId } = req.body
-        const appointmentData = await appointmentModel.findById(appointmentId)
+        // const { appointmentId } = req.body
+        const { amount } = req.body; // New Code
 
-        if (!appointmentData || appointmentData.cancelled) {
-            return res.json({ success: false, message: 'Appointment Cancelled or not found' })
+        if (!amount) {
+            return res.json({ success: false, message: 'Amount is required' });
         }
 
         // creating options for razorpay payment
         const options = {
-            amount: appointmentData.amount * 100,
+            amount: amount * 100,
             currency: process.env.CURRENCY,
-            receipt: appointmentId,
-        }
+            receipt: 'receipt#' + Date.now(), // Required, you can create a unique ID
+        };
 
         // creation of an order
         const order = await razorpayInstance.orders.create(options)
@@ -280,7 +280,7 @@ const verifyRazorpay = async (req, res) => {
         const orderInfo = await razorpayInstance.orders.fetch(razorpay_order_id)
 
         if (orderInfo.status === 'paid') {
-            await appointmentModel.findByIdAndUpdate(orderInfo.receipt, { payment: true })
+            // await appointmentModel.findByIdAndUpdate(orderInfo.receipt, { payment: true })
             res.json({ success: true, message: "Payment Successful" })
         }
         else {
@@ -296,13 +296,11 @@ const verifyRazorpay = async (req, res) => {
 const paymentStripe = async (req, res) => {
     try {
 
-        const { appointmentId } = req.body
+        const { amount } = req.body; //total amount
         const { origin } = req.headers
 
-        const appointmentData = await appointmentModel.findById(appointmentId)
-
-        if (!appointmentData || appointmentData.cancelled) {
-            return res.json({ success: false, message: 'Appointment Cancelled or not found' })
+        if (!amount) {
+            return res.json({ success: false, message: 'Amount is required' });
         }
 
         const currency = process.env.CURRENCY.toLocaleLowerCase()
@@ -311,16 +309,16 @@ const paymentStripe = async (req, res) => {
             price_data: {
                 currency,
                 product_data: {
-                    name: "Appointment Fees"
+                    name: "Consultation Fees"
                 },
-                unit_amount: appointmentData.amount * 100
+                unit_amount: amount * 100
             },
             quantity: 1
         }]
 
         const session = await stripeInstance.checkout.sessions.create({
-            success_url: `${origin}/verify?success=true&appointmentId=${appointmentData._id}`,
-            cancel_url: `${origin}/verify?success=false&appointmentId=${appointmentData._id}`,
+            success_url: `${origin}/verify?success=true`, // Remove appointmentId
+            cancel_url: `${origin}/verify?success=false`, // Remove appointmentId
             line_items: line_items,
             mode: 'payment',
         })
@@ -336,10 +334,12 @@ const paymentStripe = async (req, res) => {
 const verifyStripe = async (req, res) => {
     try {
 
-        const { appointmentId, success } = req.body
+        //Remove Appointment id and success key as well.
+        //const { appointmentId, success } = req.query
+        const { success } = req.query; // Only look for success flag.
 
         if (success === "true") {
-            await appointmentModel.findByIdAndUpdate(appointmentId, { payment: true })
+            // await appointmentModel.findByIdAndUpdate(appointmentId, { payment: true }) //Old Code
             return res.json({ success: true, message: 'Payment Successful' })
         }
 

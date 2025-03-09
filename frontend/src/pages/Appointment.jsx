@@ -2,16 +2,19 @@ import React, { useContext, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { AppContext } from '../context/AppContext';
 import { assets } from '../assets/assets';
+import axios from 'axios'; // Import axios
+import { toast } from 'react-toastify'; // Import toast
 
 const Appointment = () => {
     const { docId } = useParams();
-    const { doctors, currencySymbol } = useContext(AppContext);
+    const { doctors, currencySymbol, token, backendUrl } = useContext(AppContext); // Include token and backendUrl
 
     const [docInfo, setDocInfo] = useState(null);
     const [selectedPlan, setSelectedPlan] = useState(null);
     const [selectedAddons, setSelectedAddons] = useState([]);
     const [cartItems, setCartItems] = useState([]);
     const [notification, setNotification] = useState(null);
+    const [paymentLoading, setPaymentLoading] = useState(false); // Add loading state
 
     const plans = [
         {
@@ -85,20 +88,20 @@ const Appointment = () => {
         if (selectedPlan) {
             setCartItems(prevItems => prevItems.filter(item => item.name !== selectedPlan.name));
         }
-        
+
         // Set the new plan
         setSelectedPlan(plan);
-        
+
         // Add the new plan to cart
         setCartItems(prevItems => {
             // Filter out any previous plan
-            const itemsWithoutPlans = prevItems.filter(item => 
+            const itemsWithoutPlans = prevItems.filter(item =>
                 !plans.some(p => p.name === item.name)
             );
             // Add the new plan
             return [...itemsWithoutPlans, plan];
         });
-        
+
         setNotification({ type: 'success', message: `${plan.name} plan added!` });
         setTimeout(() => setNotification(null), 3000);
     };
@@ -113,7 +116,7 @@ const Appointment = () => {
 
         // Check if addon is already selected
         const isAddonSelected = selectedAddons.some(a => a.name === addon.name);
-        
+
         if (isAddonSelected) {
             // Remove addon from selected list and cart
             setSelectedAddons(prevAddons => prevAddons.filter(a => a.name !== addon.name));
@@ -125,7 +128,7 @@ const Appointment = () => {
             setCartItems(prevItems => [...prevItems, addon]);
             setNotification({ type: 'info', message: `${addon.label} added!` });
         }
-        
+
         setTimeout(() => setNotification(null), 3000);
     };
 
@@ -133,7 +136,7 @@ const Appointment = () => {
     const removeItemFromCart = (itemToRemove) => {
         // Check if we're removing a plan
         const isPlan = plans.some(plan => plan.name === itemToRemove.name);
-        
+
         if (isPlan) {
             // If removing a plan, clear plan and all addons
             setSelectedPlan(null);
@@ -146,7 +149,7 @@ const Appointment = () => {
             setSelectedAddons(prevAddons => prevAddons.filter(addon => addon.name !== itemToRemove.name));
             setNotification({ type: 'info', message: `${itemToRemove.label} removed.` });
         }
-        
+
         setTimeout(() => setNotification(null), 3000);
     };
 
@@ -172,17 +175,94 @@ const Appointment = () => {
     // Check if addon is selected
     const isAddonSelected = (addon) => selectedAddons.some(a => a.name === addon.name);
 
-    // Proceed to checkout
-    const proceedToCheckout = () => {
-        if (cartItems.length === 0) {
-            setNotification({ type: 'info', message: 'Your cart is empty.' });
-            setTimeout(() => setNotification(null), 3000);
-            return;
+    // Razorpay Payment
+    const handleRazorpayPayment = async () => {
+        setPaymentLoading(true);
+        try {
+            const totalPrice = calculateTotal();  // Get the total price
+            const appointmentData = {  // Create a payload to send to your backend
+                amount: totalPrice
+            };
+
+            const { data } = await axios.post(backendUrl + '/api/user/payment-razorpay', appointmentData, {  // Call your backend API
+                headers: { token },
+            });
+
+            if (data.success) {
+                const options = {
+                    key: import.meta.env.VITE_RAZORPAY_KEY_ID,
+                    amount: data.order.amount,
+                    currency: data.order.currency,
+                    name: 'Consultation Payment',
+                    description: 'Payment for consultation',
+                    order_id: data.order.id,
+                    handler: async (response) => {
+                        // Payment verification
+                        try {
+                            const verificationData = await axios.post(backendUrl + '/api/user/verifyRazorpay', response, {
+                                headers: { token },
+                            });
+
+                            if (verificationData.data.success) {
+                                toast.success('Payment successful!');
+                                clearCart();
+                                // Redirect or update UI as needed
+                            } else {
+                                toast.error('Payment verification failed.');
+                            }
+                        } catch (error) {
+                            console.error('Razorpay verification error:', error);
+                            toast.error('Payment verification failed.');
+                        } finally {
+                            setPaymentLoading(false);
+                        }
+                    },
+                    prefill: {
+                        name: docInfo.name,
+                        email: '', // Optionally prefill user's email
+                        contact: '' // Optionally prefill user's contact
+                    },
+                    theme: {
+                        color: '#3498db' // Customize theme color
+                    }
+                };
+
+                const razor = new window.Razorpay(options);
+                razor.open();
+            } else {
+                toast.error(data.message);
+            }
+        } catch (error) {
+            console.error('Razorpay error:', error);
+            toast.error('Payment failed. Please try again.');
+        } finally {
+            setPaymentLoading(false);
         }
-        
-        // Implement checkout logic here
-        setNotification({ type: 'success', message: 'Proceeding to checkout...' });
-        setTimeout(() => setNotification(null), 3000);
+    };
+
+    // Stripe Payment
+    const handleStripePayment = async () => {
+        setPaymentLoading(true);
+        try {
+            const totalPrice = calculateTotal(); // Get the total price
+            const appointmentData = {
+                amount: totalPrice  // Total amount
+            };
+            const { data } = await axios.post(backendUrl + '/api/user/payment-stripe', appointmentData, {  // Call your backend API
+                headers: { token },
+            });
+
+            if (data.success) {
+                window.location.href = data.session_url; // Redirect to Stripe checkout
+            } else {
+                toast.error(data.message);
+            }
+        } catch (error) {
+            console.error('Stripe error:', error);
+            toast.error('Payment failed. Please try again.');
+        } finally {
+            setPaymentLoading(false);
+        }
     };
 
     // Render feature list items
@@ -212,8 +292,8 @@ const Appointment = () => {
             {/* Notification */}
             {notification && (
                 <div className={`fixed top-4 left-1/2 transform -translate-x-1/2 p-4 rounded-md shadow-lg z-50 flex items-center max-w-md w-full ${
-                    notification.type === 'success' ? 'bg-green-100 border-l-4 border-green-600 text-green-800' : 
-                    'bg-blue-100 border-l-4 border-blue-600 text-blue-800'
+                    notification.type === 'success' ? 'bg-green-100 border-l-4 border-green-600 text-green-800' :
+                        'bg-blue-100 border-l-4 border-blue-600 text-blue-800'
                 }`} role="alert">
                     <div className="flex-shrink-0 mr-3">
                         {notification.type === 'success' ? (
@@ -235,7 +315,7 @@ const Appointment = () => {
                 <div className="md:flex">
                     <div className="md:flex-shrink-0">
                         <img
-                            className="h-48 w-full object-cover md:w-72 md:h-72"
+                            className="w-full h-auto object-cover md:w-72 md:h-72" /* Modified class */
                             src={docInfo.image}
                             alt={docInfo.name}
                         />
@@ -245,7 +325,7 @@ const Appointment = () => {
                             <h1 className="text-2xl font-bold text-gray-800">{docInfo.name}</h1>
                             <img className="w-5 h-5 ml-2" src={assets.verified_icon} alt="Verified" />
                         </div>
-                        
+
                         <div className="flex items-center gap-2 mt-2">
                             <p className="text-gray-700">
                                 {docInfo.degree} - {docInfo.speciality}
@@ -254,7 +334,7 @@ const Appointment = () => {
                                 {docInfo.experience}
                             </span>
                         </div>
-                        
+
                         <div className="mt-4">
                             <h3 className="flex items-center gap-1 text-lg font-medium text-gray-800">
                                 About <img className="w-3" src={assets.info_icon} alt="" />
@@ -268,7 +348,7 @@ const Appointment = () => {
             </div>
 
             {/* Main Content */}
-            <div className="mt-12 md:flex md:space-x-8">
+            <div className="mt-12 flex flex-col md:flex-row md:space-x-8"> {/* Modified to flex-col on small screens */}
                 <div className="md:w-2/3">
                     {/* Plans Section */}
                     <section>
@@ -276,19 +356,19 @@ const Appointment = () => {
                             <h2 className="text-2xl font-bold text-gray-800">Choose Your Consultation Plan</h2>
                             <div className="flex-grow border-t border-gray-300 ml-4"></div>
                         </div>
-                        
-                        <div className="grid md:grid-cols-3 gap-6">
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6"> {/* Modified grid for responsiveness */}
                             {plans.map((plan) => (
                                 <div
                                     key={plan.name}
                                     className={`relative overflow-hidden rounded-lg shadow-md transition-all duration-300 hover:shadow-lg ${
-                                        selectedPlan === plan 
-                                            ? 'border-2 border-blue-500 ring-4 ring-blue-100' 
+                                        selectedPlan === plan
+                                            ? 'border-2 border-blue-500 ring-4 ring-blue-100'
                                             : 'border border-gray-200'
                                     }`}
-                                    style={{ 
-                                        borderColor: selectedPlan === plan ? '#3498db' : '', 
-                                        boxShadow: selectedPlan === plan ? '0 0 0 4px rgba(52, 152, 219, 0.2)' : '' 
+                                    style={{
+                                        borderColor: selectedPlan === plan ? '#3498db' : '',
+                                        boxShadow: selectedPlan === plan ? '0 0 0 4px rgba(52, 152, 219, 0.2)' : ''
                                     }}
                                 >
                                     {/* Popular tag positioned above the title */}
@@ -304,19 +384,19 @@ const Appointment = () => {
                                             <h3 className="text-xl font-bold text-gray-800">{plan.title}</h3>
                                             <p className="text-gray-600 text-sm">{plan.subtitle}</p>
                                         </div>
-                                        
+
                                         <ul className="space-y-2 my-6">
                                             {plan.features.map((feature) => renderFeature(feature))}
                                         </ul>
-                                        
+
                                         <div className="mt-auto pt-4 border-t border-gray-200">
                                             {/* Centered price */}
                                             <div className="flex justify-center items-center mb-3">
                                                 <span className="text-3xl font-bold text-gray-800">{formatPrice(plan.priceUSD)}</span>
                                             </div>
-                                            <button 
+                                            <button
                                                 className="w-full py-2 px-4 rounded-md transition-colors duration-200 flex items-center justify-center text-white"
-                                                style={{ 
+                                                style={{
                                                     backgroundColor: selectedPlan === plan ? '#3498db' : '#3498db',
                                                     opacity: selectedPlan === plan ? 0.9 : 1
                                                 }}
@@ -337,19 +417,19 @@ const Appointment = () => {
                             <h2 className="text-2xl font-bold text-gray-800">Enhance Your Consultation</h2>
                             <div className="flex-grow border-t border-gray-300 ml-4"></div>
                         </div>
-                        
+
                         <div className="space-y-4">
                             {addons.map((addon) => (
                                 <div
                                     key={addon.name}
                                     className={`relative rounded-lg border transition-all duration-200 cursor-pointer ${
-                                        !selectedPlan 
-                                            ? 'opacity-50 border-gray-200 bg-gray-50' 
+                                        !selectedPlan
+                                            ? 'opacity-50 border-gray-200 bg-gray-50'
                                             : isAddonSelected(addon)
-                                                ? 'border-red-500 bg-red-50' 
+                                                ? 'border-red-500 bg-red-50'
                                                 : 'border-gray-200 hover:border-red-300 hover:bg-red-50'
                                     }`}
-                                    style={{ 
+                                    style={{
                                         borderColor: isAddonSelected(addon) ? '#e74c3c' : '',
                                         backgroundColor: isAddonSelected(addon) ? 'rgba(231, 76, 60, 0.05)' : ''
                                     }}
@@ -359,9 +439,9 @@ const Appointment = () => {
                                         <div className="flex items-center">
                                             <div className={`flex-shrink-0 h-10 w-10 rounded-full flex items-center justify-center ${
                                                 isAddonSelected(addon) ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-500'
-                                            }`} style={{ 
-                                                backgroundColor: isAddonSelected(addon) ? 'rgba(231, 76, 60, 0.2)' : '', 
-                                                color: isAddonSelected(addon) ? '#e74c3c' : '' 
+                                            }`} style={{
+                                                backgroundColor: isAddonSelected(addon) ? 'rgba(231, 76, 60, 0.2)' : '',
+                                                color: isAddonSelected(addon) ? '#e74c3c' : ''
                                             }}>
                                                 <i className={`${addon.iconClass} text-lg`}></i>
                                             </div>
@@ -388,11 +468,11 @@ const Appointment = () => {
                 </div>
 
                 {/* Checkout Summary (Cart) */}
-                <div className="md:w-1/3 mt-12 md:mt-0">
+                <div className="w-full md:w-1/3 mt-12 md:mt-0"> {/* Made cart full-width on small screens */}
                     <div className="bg-white rounded-lg shadow-md sticky top-8">
                         <div className="p-6">
                             <h2 className="text-xl font-bold text-gray-800 mb-4">Consultation Summary</h2>
-                            
+
                             {cartItems.length === 0 ? (
                                 <div className="py-8 text-center border-t border-b border-gray-200">
                                     <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mx-auto text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -414,7 +494,7 @@ const Appointment = () => {
                                                 </div>
                                                 <div className="flex items-center">
                                                     <span className="font-medium text-gray-800 mr-3">{formatPrice(item.priceUSD)}</span>
-                                                    <button 
+                                                    <button
                                                         onClick={() => removeItemFromCart(item)}
                                                         className="text-gray-400 hover:text-red-500 transition-colors duration-200"
                                                     >
@@ -426,24 +506,35 @@ const Appointment = () => {
                                             </li>
                                         ))}
                                     </ul>
-                                    
+
                                     <div className="py-4 border-t border-gray-200">
                                         <div className="flex justify-between items-center">
                                             <span className="font-bold text-gray-800">Total</span>
                                             <span className="text-2xl font-bold text-gray-800">{formatPrice(calculateTotal())}</span>
                                         </div>
                                     </div>
-                                    
+
                                     <div className="mt-6 space-y-3">
-                                        <button 
-                                            className="w-full text-white font-bold py-3 px-4 rounded-md shadow transition-colors duration-200"
+
+                                        <button
+                                            className="w-full text-white font-bold py-3 px-4 rounded-md shadow transition-colors duration-200 flex items-center justify-center"
                                             style={{ backgroundColor: '#3498db' }}
-                                            onClick={proceedToCheckout}
+                                            onClick={handleStripePayment}
+                                            disabled={paymentLoading}
                                         >
-                                            Proceed to Checkout
+                                            {paymentLoading ? 'Processing...' : 'Pay with Stripe'} <img className='max-w-20 max-h-5 ml-2' src={assets.stripe_logo} alt="" />
                                         </button>
-                                        
-                                        <button 
+
+                                        <button
+                                            className="w-full text-white font-bold py-3 px-4 rounded-md shadow transition-colors duration-200 flex items-center justify-center"
+                                            style={{ backgroundColor: '#3498db' }}
+                                            onClick={handleRazorpayPayment}
+                                            disabled={paymentLoading}
+                                        >
+                                            {paymentLoading ? 'Processing...' : 'Pay with Razorpay'}   <img className='max-w-20 max-h-5 ml-2' src={assets.razorpay_logo} alt="" />
+                                        </button>
+
+                                        <button
                                             className="w-full bg-white hover:bg-gray-100 text-gray-800 font-semibold py-2 px-4 border border-gray-300 rounded-md shadow-sm transition-colors duration-200"
                                             onClick={clearCart}
                                         >
